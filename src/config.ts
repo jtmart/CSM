@@ -214,9 +214,16 @@ export const DEFAULT_CONFIG: PluginConfig = {
       secret: true,
       email: true,
       phone: true,
-      ip: true,
+      // This memory pool documents infrastructure: paths and IPs ARE the payload.
+      // `path: 'normalize'` is a trap -- redactor.ts normalizePath() returns
+      // [REDACTED_PATH] whenever workspaceRoot is unset (CSM_WORKSPACE_ROOT), so
+      // "normalize" silently destroyed every absolute path, before embeddings, and
+      // irreversibly. Secrets are still stripped: SECRET_PATTERNS and urlCreds run
+      // independently of these two flags and catch postgres://user:pass@host,
+      // API keys, bearer tokens, JWTs and PEM private-key blocks.
+      ip: false,
       urlCreds: true,
-      path: 'normalize' as const,
+      path: 'off' as const,
     },
     workspaceRoot: getEnvString('CSM_WORKSPACE_ROOT'),
   },
