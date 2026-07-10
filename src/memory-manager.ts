@@ -430,14 +430,27 @@ async saveMemory(options: MemorySaveOptions): Promise<Memory> {
       return memories;
     }
 
+    // A failure here silently turns semantic search into keyword search. Keep the
+    // fallback (degrade, don't crash) but make the degradation impossible to miss:
+    // a quiet `debug` here previously caused a live instance to be diagnosed as
+    // "semantic search broken" when the real cause was an embedding-provider error.
     let queryEmbedding: number[] = [];
     try {
       queryEmbedding = await this.embeddings.generate(options.query);
-    } catch {
-      queryEmbedding = [];
+    } catch (error) {
+      getLogger().warn(
+        `Embedding provider failed for the search query; falling back to TEXT search. `
+        + `Results are keyword-based, NOT semantic. Cause: `
+        + `${error instanceof Error ? error.message : String(error)}`,
+      );
+      return this.textSearchFallback(options);
     }
     if (!queryEmbedding || queryEmbedding.length === 0) {
-      getLogger().debug('No query embedding (no provider/pgvector): using text fallback');
+      getLogger().warn(
+        'Embedding provider returned an empty query embedding; falling back to TEXT search. '
+        + 'Results are keyword-based, NOT semantic. Check the embedding provider, model, '
+        + 'API key and EMBEDDING_DIMENSIONS.',
+      );
       return this.textSearchFallback(options);
     }
 
