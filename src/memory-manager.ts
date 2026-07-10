@@ -573,16 +573,20 @@ async saveMemory(options: MemorySaveOptions): Promise<Memory> {
     let query = 'SELECT * FROM memories WHERE 1=1';
     const params: unknown[] = [];
     let paramIndex = 1;
+    const searchMode = options.searchMode ?? (options.projectId ? 'project' : 'global');
 
-    if (options.projectId) {
+    if (searchMode === 'project' && options.projectId) {
       query += ` AND project_id = $${paramIndex}`;
       params.push(options.projectId);
       paramIndex++;
-    } else if (options.searchMode === 'project') {
-      // Default to current project if available
-      // This would need context awareness - for now skip
-    } else if (options.searchMode === 'legacy') {
-      query += ` AND project_id IS NULL`;
+    } else if (searchMode === 'legacy') {
+      if (options.projectId) {
+        query += ` AND (project_id = $${paramIndex} OR project_id IS NULL)`;
+        params.push(options.projectId);
+        paramIndex++;
+      } else {
+        query += ' AND project_id IS NULL';
+      }
     }
 
     if (options.type) {

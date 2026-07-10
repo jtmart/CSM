@@ -1,5 +1,5 @@
 import { Database } from "./database.js";
-import type { MemorySearchOptions } from "./types.js";
+import type { MemorySearchMode, MemorySearchOptions } from "./types.js";
 import { ilikeExpr, jsonContainsParam, jsonExtractValue } from "./db/query-dialect.js";
 import { getLogger } from "./logger.js";
 
@@ -22,16 +22,26 @@ const RRF_K = 60;
 function buildWhereClause(
   params: unknown[],
   projectId?: string,
+  searchMode?: MemorySearchMode,
   type?: string,
   tags?: string[],
   minImportance?: number,
 ): string {
   let paramIdx = params.length + 1;
   const clauses: string[] = [];
-  if (projectId) {
+  const scope = searchMode ?? (projectId ? 'project' : 'global');
+  if (scope === 'project' && projectId) {
     clauses.push(`project_id = $${paramIdx}`);
     params.push(projectId);
     paramIdx++;
+  } else if (scope === 'legacy') {
+    if (projectId) {
+      clauses.push(`(project_id = $${paramIdx} OR project_id IS NULL)`);
+      params.push(projectId);
+      paramIdx++;
+    } else {
+      clauses.push('project_id IS NULL');
+    }
   }
   if (type) {
     clauses.push(`memory_type = $${paramIdx}`);
@@ -59,11 +69,12 @@ export async function ftsSearch(
   type?: string,
   tags?: string[],
   minImportance?: number,
+  searchMode?: MemorySearchMode,
 ): Promise<Array<{ id: number; rank: number }>> {
   const pool = db.getPool();
   try {
     const params: unknown[] = [query, limit];
-    const whereExtra = buildWhereClause(params, projectId, type, tags, minImportance);
+    const whereExtra = buildWhereClause(params, projectId, searchMode, type, tags, minImportance);
     const result = await pool.query(
       // `search_vector` exists but is NEVER populated: the schema's
       // `ADD COLUMN IF NOT EXISTS search_vector ... GENERATED ALWAYS AS ...` is a no-op,
@@ -108,10 +119,11 @@ export async function vectorSearch(
   type?: string,
   tags?: string[],
   minImportance?: number,
+  searchMode?: MemorySearchMode,
 ): Promise<Array<{ id: number; rank: number }>> {
   const pool = db.getPool();
   const params: unknown[] = [JSON.stringify(embedding), limit];
-  const whereExtra = buildWhereClause(params, projectId, type, tags, minImportance);
+  const whereExtra = buildWhereClause(params, projectId, searchMode, type, tags, minImportance);
   const result = await pool.query(
     `SELECT id, 1 - (embedding <=> $1::vector) AS similarity
      FROM memories
@@ -132,6 +144,7 @@ export async function entityMatchBoost(
   type?: string,
   tags?: string[],
   minImportance?: number,
+  searchMode?: MemorySearchMode,
 ): Promise<Array<{ id: number; boost: number }>> {
   const pool = db.getPool();
   const d = db.dialect;
@@ -139,7 +152,7 @@ export async function entityMatchBoost(
   const conceptsJson = JSON.stringify([query]);
   try {
     const params: unknown[] = [like, conceptsJson];
-    const whereExtra = buildWhereClause(params, projectId, type, tags, minImportance);
+    const whereExtra = buildWhereClause(params, projectId, searchMode, type, tags, minImportance);
     params.push(limit);
     const result = await pool.query(
       `SELECT id,
@@ -210,25 +223,26 @@ export async function hybridSearch(
   const type = options.type;
   const tags = options.tags;
   const minImportance = options.minImportance;
+  const searchMode = options.searchMode ?? (projectId ? 'project' : 'global');
   const weights = options.weights ?? DEFAULT_WEIGHTS;
   const ftsAvailable = await checkFtsAvailable(db);
 
     let textScores: Map<number, number>;
 
   // Vector search (always available)
-  const vectorResults = await vectorSearch(db, embedding, limit * 3, projectId, type, tags, minImportance);
+  const vectorResults = await vectorSearch(db, embedding, limit * 3, projectId, type, tags, minImportance, searchMode);
   const vectorScores = reciprocalRankFusion(vectorResults);
 
   // FTS search (may be unavailable)
   if (ftsAvailable) {
-    const ftsResults = await ftsSearch(db, query, limit * 3, projectId, type, tags, minImportance);
+    const ftsResults = await ftsSearch(db, query, limit * 3, projectId, type, tags, minImportance, searchMode);
     textScores = reciprocalRankFusion(ftsResults);
   } else {
     textScores = new Map();
   }
 
    // Entity boost
-   const entityResults = await entityMatchBoost(db, query, limit * 3, projectId, type, tags, minImportance);
+   const entityResults = await entityMatchBoost(db, query, limit * 3, projectId, type, tags, minImportance, searchMode);
    const entityBoosts = new Map(entityResults.map((e) => [e.id, e.boost]));
 
   // Recency boost (prefer recent memories)
