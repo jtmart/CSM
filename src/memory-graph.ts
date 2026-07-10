@@ -2,7 +2,7 @@ import { Database } from "./database.js";
 import type { ExtractedConcept } from "./concept-extractor.js";
 import type { Memory } from "./types.js";
 import { getLogger } from "./logger.js";
-import { jsonExtractValue } from "./db/query-dialect.js";
+import { jsonExtractValue, parseArrayField, toDate } from "./db/query-dialect.js";
 import { recordRecallBatch } from "./recall-telemetry.js";
 
 export type MemoryLink = {
@@ -133,7 +133,8 @@ export async function buildLinksForMemory(
   const links: MemoryLink[] = [];
 
   for (const candidate of memoryRows.rows as CandidateRow[]) {
-    const candidateConcepts = (candidate.concepts ?? []) as { value: string }[];
+    // SQLite returns the extracted-concepts JSON as TEXT, not an array.
+    const candidateConcepts = parseArrayField(d, candidate.concepts) as { value: string }[];
     const shared = entityValues.filter(v =>
       candidateConcepts.some(c => c.value === v)
     );
@@ -145,13 +146,14 @@ export async function buildLinksForMemory(
       [memoryId]
     );
     const sourceContent = (sourceRow.rows as SourceRow[])[0]?.content ?? "";
-    const sourceDate = (sourceRow.rows as SourceRow[])[0]?.created_at ?? new Date();
+    // SQLite returns timestamps as strings; inferLinkType() calls .getTime() on them.
+    const sourceDate = toDate(d, (sourceRow.rows as SourceRow[])[0]?.created_at);
 
     const linkType = inferLinkType(
       sourceContent,
       candidate.content,
       sourceDate,
-      candidate.created_at,
+      toDate(d, candidate.created_at),
       concepts.filter(c => shared.includes(c.value))
     );
 

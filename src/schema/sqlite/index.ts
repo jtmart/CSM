@@ -238,6 +238,22 @@ export async function initializeMinimalSqliteSchema(pool: DatabasePool): Promise
   await pool.query('CREATE INDEX IF NOT EXISTS idx_belief_knowledge_status ON belief_knowledge_store(status, belief_kind)');
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS memory_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+      target_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+      link_type TEXT NOT NULL CHECK (link_type IN ('shared_entity', 'causal', 'temporal', 'reference')),
+      shared_entities TEXT NOT NULL DEFAULT '[]',
+      strength REAL NOT NULL DEFAULT 0.5,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(source_id, target_id, link_type)
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_memory_links_source ON memory_links(source_id)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links(target_id)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_memory_links_type ON memory_links(link_type)');
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS project_scopes (
       project_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
