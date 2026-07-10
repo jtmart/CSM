@@ -1,6 +1,7 @@
 import { Database } from "./database.js";
 import type { MemorySearchOptions } from "./types.js";
 import { ilikeExpr, jsonContainsParam, jsonExtractValue } from "./db/query-dialect.js";
+import { getLogger } from "./logger.js";
 
 export type HybridWeights = {
   vector: number;
@@ -64,16 +65,37 @@ export async function ftsSearch(
     const params: unknown[] = [query, limit];
     const whereExtra = buildWhereClause(params, projectId, type, tags, minImportance);
     const result = await pool.query(
-      `SELECT id, ts_rank_cd(search_vector, websearch_to_tsquery('english', $1)) AS rank
+      // `search_vector` exists but is NEVER populated: the schema's
+      // `ADD COLUMN IF NOT EXISTS search_vector ... GENERATED ALWAYS AS ...` is a no-op,
+      // because the plain column already exists from CREATE TABLE, and Postgres will not
+      // upgrade a plain column into a generated one. Reading it made this whole arm return
+      // zero rows for every query, forever. Build the vector from the row instead. This is a
+      // sequential scan; the shared pool is small, and correctness beats an index that does
+      // not exist. Do NOT "fix" this by ALTERing the shared memories table.
+      `SELECT id, ts_rank_cd(
+                setweight(to_tsvector('english', coalesce(content, '')), 'A') ||
+                setweight(to_tsvector('english', coalesce(array_to_string(tags, ' '), '')), 'B') ||
+                setweight(to_tsvector('english', coalesce(metadata::text, '')), 'C'),
+                websearch_to_tsquery('english', $1)) AS rank
        FROM memories
-       WHERE search_vector @@ websearch_to_tsquery('english', $1)
+       WHERE (
+                setweight(to_tsvector('english', coalesce(content, '')), 'A') ||
+                setweight(to_tsvector('english', coalesce(array_to_string(tags, ' '), '')), 'B') ||
+                setweight(to_tsvector('english', coalesce(metadata::text, '')), 'C')
+              ) @@ websearch_to_tsquery('english', $1)
          ${whereExtra}
        ORDER BY rank DESC
        LIMIT $2`,
       params,
     );
     return result.rows.map((r: any, i: number) => ({ id: r.id, rank: 1 / (RRF_K + i + 1) }));
-  } catch {
+  } catch (error) {
+    // An empty arm and a broken arm must not look identical to the caller.
+    getLogger().warn(
+      `Lexical (full-text) search FAILED and returned no rows; results are embedding-only. ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
     return [];
   }
 }
@@ -222,15 +244,16 @@ export async function hybridSearch(
     .map(([id, score]) => ({ id, score }));
 }
 
+// The old guard asked "does a column named search_vector exist?". It does — and it is empty,
+// so the guard said yes while the arm matched nothing. Ask instead whether the text-search
+// machinery itself works, which is what we now depend on: to_tsvector over content.
 async function checkFtsAvailable(db: Database): Promise<boolean> {
   try {
     const pool = db.getPool();
-    const result = await pool.query(
-      `SELECT column_name FROM information_schema.columns
-       WHERE table_name = 'memories' AND column_name = 'search_vector'
-       LIMIT 1`,
+    await pool.query(
+      `SELECT to_tsvector('english', 'probe') @@ websearch_to_tsquery('english', 'probe') AS ok`,
     );
-    return result.rows.length > 0;
+    return true;
   } catch {
     return false;
   }
