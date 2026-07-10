@@ -220,7 +220,19 @@ async saveMemory(options: MemorySaveOptions): Promise<Memory> {
       const extraction = extractConcepts(contentToProcess);
       const extracted = extraction.concepts;
       const mergedMetadata = { ...(options.metadata ?? {}), extracted_concepts: extracted };
-      const mergedTags = Array.from(new Set([...(options.tags ?? []), ...extracted.map(c => c.value)]));
+
+      // Concept values are reused as tags, but `decision` and `error` concepts are SENTENCES by
+      // construction: the extractor captures from a keyword up to the first period, and error
+      // messages are captured whole. No length clamp can turn a sentence into a label, which is
+      // why patch #6 (clampConcept) did not stop this. Tags are an exact-match AND filter
+      // (list_memories), so a sentence there is unusable noise. Decisions and errors are kept in
+      // metadata.extracted_concepts, where they remain searchable, and they still feed the memory
+      // graph via buildLinksForMemory(), which reads the concept array rather than the tags.
+      const TAGGABLE_CONCEPTS = new Set(['file', 'function', 'tool', 'dependency', 'concept']);
+      const mergedTags = Array.from(new Set([
+        ...(options.tags ?? []),
+        ...extracted.filter((c) => TAGGABLE_CONCEPTS.has(c.type)).map((c) => c.value),
+      ]));
   
       // Generate embedding first
       let embedding: number[] | null = null;
