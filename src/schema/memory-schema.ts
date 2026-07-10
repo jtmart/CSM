@@ -26,12 +26,7 @@ const row = result.rows[0] as { column_type?: string };
   const expectedType = `vector(${EMBEDDING_DIMENSIONS})`;
   if (row.column_type === expectedType) return;
 
-  const legacyColumn = `embedding_legacy_${Date.now()}`;
-  await pool.query(`ALTER TABLE memories RENAME COLUMN embedding TO ${legacyColumn}`);
-   await pool.query(
-     `ALTER TABLE memories ADD COLUMN embedding VECTOR(${EMBEDDING_DIMENSIONS})`,
-   );
-    getLogger().warn(`Embedding dimension changed: ${row.column_type ?? '(unknown)'} → ${expectedType}. Old column preserved as ${legacyColumn}. Run csm_memory_backfill_embeddings tool to regenerate embeddings at the new dimension.`);
+  getLogger().warn(`memories.embedding is ${row.column_type}, expected ${expectedType}. Leaving as-is (no auto-migration) — fix manually if a real dimension change is intended.`);
   }
 
 export async function initializeMemorySchema(pool: DatabasePool): Promise<void> {

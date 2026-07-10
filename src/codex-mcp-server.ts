@@ -1,6 +1,7 @@
 import readline from 'node:readline';
 import { CodexMemoryBridge } from './codex-bridge.js';
 import { invokeMcpTool, MCP_TOOLS } from './codex-mcp-tools.js';
+import { setClientIdentity } from './bridge-provenance.js';
 
 const SERVER_NAME = 'Cross-Session Memory Bridge';
 const SERVER_VERSION = '1.0.0';
@@ -22,9 +23,11 @@ function sendError(id: JsonRpcId, message: string): void {
 }
 
 function textResult(payload: unknown) {
+  const isPlainObject =
+    payload !== null && typeof payload === 'object' && !Array.isArray(payload);
   return {
     content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
-    structuredContent: payload,
+    structuredContent: isPlainObject ? (payload as Record<string, unknown>) : { result: payload },
   };
 }
 
@@ -33,8 +36,9 @@ function getBridge(): Promise<CodexMemoryBridge> {
   return bridgePromise;
 }
 
-async function handle(message: { id?: JsonRpcId; method?: string; params?: { name?: string; arguments?: Record<string, unknown>; protocolVersion?: string } }) {
+async function handle(message: { id?: JsonRpcId; method?: string; params?: { name?: string; arguments?: Record<string, unknown>; protocolVersion?: string; clientInfo?: { name?: string; version?: string } } }) {
   if (message.method === 'initialize' && message.id !== undefined) {
+    setClientIdentity(message.params?.clientInfo);
     sendResult(message.id, {
       protocolVersion: message.params?.protocolVersion ?? '2025-11-25',
       capabilities: { tools: {} },
@@ -66,7 +70,7 @@ async function cleanup(): Promise<void> {
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on('line', (line) => {
   if (!line.trim()) return;
-  handle(JSON.parse(line) as { id?: JsonRpcId; method?: string; params?: { name?: string; arguments?: Record<string, unknown>; protocolVersion?: string } })
+  handle(JSON.parse(line) as { id?: JsonRpcId; method?: string; params?: { name?: string; arguments?: Record<string, unknown>; protocolVersion?: string; clientInfo?: { name?: string; version?: string } } })
     .catch((error: unknown) => send({ jsonrpc: '2.0', error: { code: -32603, message: String(error) } }));
 });
 

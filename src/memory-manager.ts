@@ -430,7 +430,16 @@ async saveMemory(options: MemorySaveOptions): Promise<Memory> {
       return memories;
     }
 
-    const queryEmbedding = await this.embeddings.generate(options.query);
+    let queryEmbedding: number[] = [];
+    try {
+      queryEmbedding = await this.embeddings.generate(options.query);
+    } catch {
+      queryEmbedding = [];
+    }
+    if (!queryEmbedding || queryEmbedding.length === 0) {
+      getLogger().debug('No query embedding (no provider/pgvector): using text fallback');
+      return this.textSearchFallback(options);
+    }
 
     try {
       const results = await hybridSearch(

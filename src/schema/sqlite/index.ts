@@ -236,4 +236,17 @@ export async function initializeMinimalSqliteSchema(pool: DatabasePool): Promise
   `);
   await pool.query('CREATE INDEX IF NOT EXISTS idx_belief_knowledge_kind ON belief_knowledge_store(belief_kind)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_belief_knowledge_status ON belief_knowledge_store(status, belief_kind)');
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS project_scopes (
+      project_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      directory TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_active_at TEXT NOT NULL DEFAULT (datetime('now')),
+      memory_count INTEGER DEFAULT 0
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_project_scopes_directory ON project_scopes(directory)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_project_scopes_last_active ON project_scopes(last_active_at DESC)');
 }
