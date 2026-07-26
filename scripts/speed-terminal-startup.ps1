@@ -124,8 +124,10 @@ function Update-Profile([string]$Path) {
         Set-Content -Path $pending -Value $newContent -Encoding utf8
         Note "WRITE BLOCKED: $Path is protected (likely Windows 'Controlled folder access' guarding Documents)."
         Note "The new profile content is saved at: $pending"
-        Note "Either allow pwsh under Ransomware protection > Controlled folder access, then re-run this script,"
-        Note "or copy the file over manually: Copy-Item `"$pending`" `"$Path`" -Force"
+        Note "Allow pwsh through CFA from an ADMIN PowerShell, then re-run this script:"
+        Note "  Add-MpPreference -ControlledFolderAccessAllowedApplications (Get-Command pwsh.exe).Source"
+        Note "(A manual Copy-Item won't work - CFA blocks pwsh's writes entirely. Notepad is allowed:"
+        Note " open $pending and paste it over the profile via 'notepad `$PROFILE'.)"
         return
       }
     }
