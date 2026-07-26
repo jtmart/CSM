@@ -106,7 +106,29 @@ function Update-Profile([string]$Path) {
     if (-not (Test-Path $bakDir)) { New-Item -ItemType Directory -Path $bakDir -Force | Out-Null }
     $bak = Join-Path $bakDir "$(Split-Path $Path -Leaf).bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
     Set-Content -Path $bak -Value $raw -Encoding utf8
-    Set-Content -Path $Path -Value ($lines -join [Environment]::NewLine) -Encoding utf8
+    $newContent = $lines -join [Environment]::NewLine
+    try {
+      Set-Content -Path $Path -Value $newContent -Encoding utf8
+    }
+    catch [System.UnauthorizedAccessException] {
+      # OneDrive-synced files sometimes carry a ReadOnly attribute: reads work,
+      # writes throw 'Access to the path is denied'. Clear it and retry.
+      $item = Get-Item $Path -Force
+      if ($item.IsReadOnly) {
+        $item.IsReadOnly = $false
+        Set-Content -Path $Path -Value $newContent -Encoding utf8
+        Note 'cleared ReadOnly attribute on the profile to write it'
+      }
+      else {
+        $pending = Join-Path $bakDir "$(Split-Path $Path -Leaf).new"
+        Set-Content -Path $pending -Value $newContent -Encoding utf8
+        Note "WRITE BLOCKED: $Path is protected (likely Windows 'Controlled folder access' guarding Documents)."
+        Note "The new profile content is saved at: $pending"
+        Note "Either allow pwsh under Ransomware protection > Controlled folder access, then re-run this script,"
+        Note "or copy the file over manually: Copy-Item `"$pending`" `"$Path`" -Force"
+        return
+      }
+    }
     Note "rewrote $Path (backup: $bak)"
   }
   elseif ($changed) {
