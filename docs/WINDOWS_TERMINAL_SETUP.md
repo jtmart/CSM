@@ -8,7 +8,10 @@ for avoiding the two classes of startup problems this repo's scripts solve:
    slow first paint.
 2. **Claude Code CLI startup warnings** about unmatched permission rules.
 
-Resolved July 2026; scripts live in `scripts/`.
+Resolved July 2026; scripts live in `scripts/`. Canonical replication copies
+live in `C:\Users\jtm\Dropbox\Sync\add-templates\terminal-startup\` — on a new
+machine, run `install.ps1` from that folder and it chains all four scripts
+(Windows side, then the WSL side via `wsl`).
 
 ## TL;DR for a fresh install
 
