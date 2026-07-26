@@ -56,10 +56,64 @@ elif command -v python3 >/dev/null 2>&1; then
 import datetime, json, re, shutil, sys
 path, dry = sys.argv[1], sys.argv[2] == "1"
 raw = open(path).read()
+
+def strip_jsonc(s):
+    # Remove // and /* */ comments and trailing commas, respecting strings.
+    out, i, n, in_str, esc = [], 0, len(s), False, False
+    while i < n:
+        c = s[i]
+        if in_str:
+            out.append(c)
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            i += 1
+        elif c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+        elif c == "/" and i + 1 < n and s[i + 1] == "/":
+            while i < n and s[i] != "\n":
+                i += 1
+        elif c == "/" and i + 1 < n and s[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (s[i] == "*" and s[i + 1] == "/"):
+                i += 1
+            i += 2
+        elif c == ",":
+            j = i + 1
+            while j < n and s[j] in " \t\r\n":
+                j += 1
+            # also skip comments between the comma and a closing bracket
+            k = j
+            while k + 1 < n and s[k] == "/" and s[k + 1] in "/*":
+                if s[k + 1] == "/":
+                    while k < n and s[k] != "\n":
+                        k += 1
+                else:
+                    k += 2
+                    while k + 1 < n and not (s[k] == "*" and s[k + 1] == "/"):
+                        k += 1
+                    k += 2
+                while k < n and s[k] in " \t\r\n":
+                    k += 1
+            if k < n and s[k] in "}]":
+                i += 1  # trailing comma - drop it
+            else:
+                out.append(c)
+                i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
 try:
-    cfg = json.loads(re.sub(r"^\s*//.*$", "", raw, flags=re.M))
-except ValueError:
-    print("  could not parse %s - edit manually: logo.type explicit, general.detectVersion=false" % path)
+    cfg = json.loads(strip_jsonc(raw))
+except ValueError as e:
+    print("  could not parse %s (%s) - edit manually: logo.type explicit, general.detectVersion=false" % (path, e))
     sys.exit(0)
 changed = []
 logo = cfg.get("logo")
