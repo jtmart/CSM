@@ -23,6 +23,24 @@ pwsh -File scripts/fix-terminal-startup.ps1 -DryRun  # Preview changes
 pwsh -File scripts/fix-terminal-startup.ps1          # Apply changes
 ```
 
+### fix-terminal-startup.sh
+Unix-side companion for the WSL/MSYS2 environment tmux runs in (its own fastfetch config and rc files): pins fastfetch's probe settings, installs a quiet-window input-drain hook for bash/zsh, disables oh-my-posh's upgrade checks. Idempotent with backups; string-aware JSONC parsing.
+
+```bash
+bash scripts/fix-terminal-startup.sh --dry-run  # Preview changes
+bash scripts/fix-terminal-startup.sh            # Apply changes
+```
+
+### speed-terminal-startup.ps1 / speed-terminal-startup.sh
+Startup speed pass: rewrites the PowerShell profile / shell rc so fastfetch prints a cached splash instantly and regenerates it in the background into a file (which also removes its last way to query the terminal — the root cause of stray characters like `7f7f\` at the first prompt), and caches the oh-my-posh init script instead of spawning oh-my-posh every shell start. Conservative (only simple invocation forms are rewritten), idempotent, backups to `%LOCALAPPDATA%\ftsu-backups` / alongside the file. See `docs/WINDOWS_TERMINAL_SETUP.md` for the full story and Windows gotchas (OneDrive profiles, Controlled Folder Access).
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File scripts/speed-terminal-startup.ps1
+```
+```bash
+bash scripts/speed-terminal-startup.sh
+```
+
 ## Usage
 Scripts are run from the project root:
 ```bash
