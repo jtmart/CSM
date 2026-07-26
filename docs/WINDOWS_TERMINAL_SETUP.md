@@ -1,125 +1,99 @@
-# Windows Terminal Setup — Startup Fixes & Speed Pass
+# Windows Terminal Setup — Startup Fixes (RESOLVED July 2026)
 
-Reference for setting up a fresh Windows machine (Surface / Windows 11) with
-the fastfetch + oh-my-posh + Clink + Alacritty/tmux(WSL) terminal stack, and
-for avoiding the two classes of startup problems this repo's scripts solve:
+Reference for replicating the terminal stack (Alacritty → psmux → pwsh, with
+fastfetch + oh-my-posh; WSL alongside) on a new Windows machine, and the
+record of the July 2026 investigation into two startup problems:
 
-1. **Stray characters on the first prompt line** (e.g. `7f7f\`, `80\`) plus a
-   slow first paint.
+1. **Stray characters on the first prompt line** (`7f7f\`, `80\`) in
+   Alacritty/psmux panes, plus slow startup.
 2. **Claude Code CLI startup warnings** about unmatched permission rules.
 
-Resolved July 2026; scripts live in `scripts/`. Canonical replication copies
-live in `C:\Users\jtm\Dropbox\Sync\add-templates\terminal-startup\` — on a new
-machine, run `install.ps1` from that folder and it chains all four scripts
-(Windows side, then the WSL side via `wsl`).
+Canonical replication copies live in
+`C:\Users\jtm\Dropbox\Sync\add-templates\terminal-startup\`. On a new machine
+run `install.ps1` from that folder — it chains everything below.
 
-## TL;DR for a fresh install
+## The three scripts that matter
 
-Run these once, in order (all idempotent, all keep timestamped backups):
+| Script | What it does |
+|---|---|
+| `fix-terminal-startup.ps1` | Windows side: rewrites unmatched Claude Code permission rules (`Write(**)`/`NotebookEdit(**)` → `Edit(**)`, `Glob(**)` → `Read(**)`) in `~\.claude\settings.json`; pins fastfetch's `logo.type`, sets `general.detectVersion: false`, drops the `terminaltheme` module, excludes external USB disks (`showExternal: false` — spin-up stalls); disables oh-my-posh's upgrade notice/auto-upgrade network checks. |
+| `fix-psmux-drain.ps1` | **The stray-character fix.** Appends a drain block to the pwsh profile, active only when `$env:ALACRITTY` is `1`: swallows pending console input until ~200ms of quiet, after profile load and at the first prompt render. |
+| `fix-terminal-startup.sh` | Same fastfetch/oh-my-posh hygiene inside WSL (separate home, separate configs). Run from a WSL shell or let `install.ps1` do it via `wsl`. |
 
-```powershell
-# Windows side (PowerShell 7+):
-pwsh -ExecutionPolicy Bypass -File .\scripts\fix-terminal-startup.ps1
-pwsh -ExecutionPolicy Bypass -File .\scripts\speed-terminal-startup.ps1
-```
+All are idempotent and keep timestamped backups.
 
-```bash
-# Unix side — run INSIDE the WSL/MSYS2 shell that tmux uses:
-bash scripts/fix-terminal-startup.sh
-bash scripts/speed-terminal-startup.sh
-```
+## Root cause of the stray characters
 
-Judge results from the **second** new shell (the first one rebuilds caches).
+The fragments were the tail of a terminal escape-query **reply** (ending in
+the ST terminator `ESC \`, whose backslash renders literally). The emitter was
+**psmux**: Alacritty launches every tab as
+`cmd /c psmux new-session pwsh.exe -NoLogo` (see `alacritty.toml`
+`[terminal.shell]`), and psmux queries the host terminal at attach. Alacritty's
+reply is forwarded into the inner pwsh pane after the prompt is live, so its
+tail lands on the input line. psmux has no option to suppress the query
+([configuration docs](https://github.com/psmux/psmux/blob/master/docs/configuration.md)),
+hence the drain on the receiving side.
 
-## Root causes, in the order they were eliminated
+Diagnosis lessons, for the next mystery like this:
 
-### Stray characters + slow startup
+- **Identify the pane's inner shell first.** fastfetch reported "Shell: CMD"
+  (the launcher), but the shell attached to the pane was pwsh via psmux. Drain
+  hooks only work in the shell that owns the input line — hooks installed in
+  bash/zsh/Clink along the way could never fire here (there is no Clink and no
+  cmd AutoRun in this setup at all; the cmd-tab prompt is oh-my-posh inside
+  psmux-hosted pwsh).
+- Reply-capable GPU terminals (Alacritty) answer queries **late and out of
+  order** ([alacritty#4872](https://github.com/alacritty/alacritty/issues/4872)),
+  so time-boxed drains can lose the race; drain at the first prompt render and
+  keep going until the line is quiet.
+- The leak only reproduces in terminals that answer queries — plain conhost
+  windows stay clean, which localizes the emitter to the tab's startup chain.
 
-The fragments (`7f7f\`, `80\`) are the tail of a terminal escape-query
-**reply** — they end in the ST terminator (`ESC \`), whose backslash renders
-literally when the reply lands on the input line instead of being read by
-whoever asked. Reply-capable GPU terminals (Alacritty, WezTerm) answer such
-queries; plain conhost doesn't, which is why the leak never appeared in a bare
-PowerShell window. Alacritty can also answer queries **out of order and
-late** ([alacritty#4872](https://github.com/alacritty/alacritty/issues/4872)),
-which is why input-drain hooks alone proved insufficient — the reply can
-outlive any reasonable drain window. The durable fix is to stop the queries,
-not catch them.
+Things that reduced probing but were **not** the leak: fastfetch's `auto`
+logo detection, `detectVersion`, the `terminaltheme` module, oh-my-posh's
+upgrade checks. Worth keeping off anyway (startup cost, fewer moving parts).
 
-Query sources eliminated, in order:
+## What was tried and rolled back
 
-| Source | Fix | Script |
-|---|---|---|
-| fastfetch `logo.type: auto` (image-protocol probe) | pin explicit `logo.type` | fix-…​.ps1/.sh |
-| fastfetch `general.detectVersion` (default true) | set `false` | fix-…​.ps1/.sh |
-| fastfetch `terminaltheme` module (OSC 10/11 color query) | remove module | fix-…​.ps1/.sh |
-| oh-my-posh upgrade notice + auto-upgrade (network checks; `disable upgrade` on current CLIs, `autoupgrade` on older) | `oh-my-posh disable notice/upgrade` | fix-…​.ps1/.sh |
-| fastfetch running against the tty at all | cached splash: print previous run's output instantly, regenerate in background **into a file** (a non-tty fastfetch cannot query anything) | speed-…​.ps1/.sh |
-| prompt-time emitters (Clink async prompt / oh-my-posh render) | drain hooks as belt-and-suspenders: Clink lua + bash `PROMPT_COMMAND` / zsh `precmd`, quiet-window strategy | fix-…​.ps1/.sh |
+- **Cached fastfetch splash** (print previous run's output, regenerate in
+  background): a non-tty fastfetch falls back to `?` placeholder glyphs, and
+  the cache doubles up with other fastfetch invocations in the startup chain.
+  Reverted (`revert-splash-cache.ps1`). The **oh-my-posh init cache** part of
+  the speed pass works fine and is kept: init script cached to
+  `%LOCALAPPDATA%\ftsu-omp-init.ps1` / `~/.cache/ftsu-omp-init.*` — delete
+  after changing the omp theme.
+- **Clink drain hook** and **bash/zsh rc drain hooks**: wrong shell for this
+  setup (see above); removed by `finalize-terminal-setup.ps1` cleanup.
 
-Extra latency sources also fixed:
+## Windows gotchas (fresh-install checklist)
 
-- **External USB disks** in fastfetch's disk module force a spin-up wait:
-  `"showExternal": false`.
-- **oh-my-posh init spawn** on every shell start: the init script is cached to
-  a file and dot-sourced/sourced (`speed-terminal-startup.*`). After changing
-  the omp theme, delete `ftsu-omp-init.*` from `%LOCALAPPDATA%` (Windows) or
-  `~/.cache` (WSL) to regenerate.
+- **PowerShell profile lives under OneDrive** (`OneDrive\Documents\PowerShell`):
+  `Copy-Item` onto placeholders can fail (write backups to `%LOCALAPPDATA%`),
+  and **Controlled Folder Access** blocks pwsh writes to Documents with
+  *Access to the path is denied*. One-time unblock from an admin PowerShell:
 
-**The final culprit on this setup was psmux.** Alacritty launches every tab as
-`cmd /c psmux new-session pwsh.exe -NoLogo` — psmux (tmux-for-Windows) queries
-the host terminal at attach, and Alacritty's reply is forwarded into the inner
-pwsh pane where its tail renders as stray input. psmux has no option to
-disable the query, so the fix is `fix-psmux-drain.ps1`: a drain block at the
-end of the PowerShell profile, active only when `$env:ALACRITTY` is `1` (set
-by the Alacritty config), that swallows pending input until ~200ms of quiet
-after profile load and again at the first prompt render. Diagnosis lesson:
-identify the *inner shell* of the leaking tab first (here fastfetch reported
-"Shell: CMD" but the pane shell was pwsh via psmux) — drain hooks only work
-if they live in that shell. Note there is no Clink and no cmd AutoRun in this
-setup; the fancy cmd-tab prompt comes from oh-my-posh inside the psmux-hosted
-pwsh.
+  ```powershell
+  Add-MpPreference -ControlledFolderAccessAllowedApplications (Get-Command pwsh.exe).Source
+  ```
 
-### Claude Code permission-rule warnings
+  (A manual `Copy-Item` doesn't bypass CFA — pwsh is still the blocked app;
+  Notepad is allowed if pasting over the profile manually.)
+- **Downloaded scripts carry Mark-of-the-Web**: `Unblock-File` or
+  `pwsh -ExecutionPolicy Bypass -File …`.
+- **WSL is a separate config universe**: its own `~/.config/fastfetch`,
+  `~/.bashrc`, oh-my-posh install. Run the `.sh` there.
+- **fastfetch configs are JSONC** (inline `//`, `/* */`, trailing commas) —
+  the `.sh` carries a string-aware parser; PS7's `ConvertFrom-Json` copes.
+- oh-my-posh CLI drift: `disable upgrade` (current) vs `disable autoupgrade`
+  (older). Scripts try both.
+- Claude Code file-permission rules only match `Edit(path)` / `Read(path)`
+  forms — `Write(**)`, `NotebookEdit(**)`, `Glob(**)` are ignored with a
+  startup warning.
 
-Claude Code's file permission checks only match `Edit(path)` and `Read(path)`
-rule forms. Rules written as `Write(**)`, `NotebookEdit(**)`, or `Glob(**)` in
-`~/.claude/settings.json` are ignored and produce startup warnings. The fixer
-rewrites them (`Write`/`NotebookEdit` → `Edit`, `Glob` → `Read`) and dedupes.
-
-## Windows gotchas discovered along the way
-
-- **PowerShell profile lives under OneDrive**
-  (`C:\Users\<user>\OneDrive\Documents\PowerShell\…`). Two write hazards:
-  - `Copy-Item` onto a OneDrive placeholder can fail with *Could not find
-    file* — write backups to `%LOCALAPPDATA%\ftsu-backups` instead.
-  - **Controlled Folder Access** (Windows Security → Ransomware protection)
-    blocks pwsh writes to Documents with *Access to the path is denied*.
-    One-time unblock from an **admin** PowerShell, then re-run:
-
-    ```powershell
-    Add-MpPreference -ControlledFolderAccessAllowedApplications (Get-Command pwsh.exe).Source
-    ```
-
-    A manual `Copy-Item` does **not** work around CFA (pwsh is still the
-    blocked app); Notepad is allowed if you prefer pasting over the profile.
-- **Downloaded scripts are Mark-of-the-Web-blocked**: `Unblock-File x.ps1`
-  or run with `pwsh -ExecutionPolicy Bypass -File x.ps1`.
-- **The tmux environment is a separate machine** as far as configs go: WSL has
-  its own `~/.config/fastfetch/`, `~/.bashrc`, and oh-my-posh install.
-  Windows-side fixes do not reach it; run the `.sh` variants inside WSL.
-- **fastfetch configs are JSONC**: inline `//`, `/* */`, and trailing commas
-  are all legal — parse accordingly (`fix-terminal-startup.sh` carries a
-  string-aware stripper; PowerShell 7's `ConvertFrom-Json` copes natively).
-- oh-my-posh CLI syntax drift: `disable autoupgrade` (old) vs
-  `disable upgrade` (current). The scripts try both.
-
-## Cache & artifact locations
+## Artifact locations
 
 | Artifact | Windows | WSL |
 |---|---|---|
-| fastfetch splash cache | `%LOCALAPPDATA%\ftsu-splash.txt` | `~/.cache/ftsu-splash` |
-| oh-my-posh init cache | `%LOCALAPPDATA%\ftsu-omp-init.ps1` | `~/.cache/ftsu-omp-init.bash` / `.zsh` |
-| Profile backups | `%LOCALAPPDATA%\ftsu-backups\` | `<file>.bak-<timestamp>` next to the file |
-| Clink drain hook | `%LOCALAPPDATA%\clink\zz-flush-startup-input.lua` | — |
-| rc drain hooks | — | marked blocks in `~/.bashrc` / `~/.zshrc` |
+| psmux drain | marked block at end of `$PROFILE` | — |
+| oh-my-posh init cache | `%LOCALAPPDATA%\ftsu-omp-init.ps1` | `~/.cache/ftsu-omp-init.*` |
+| Profile backups | `%LOCALAPPDATA%\ftsu-backups\` | `<file>.bak-<timestamp>` |

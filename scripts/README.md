@@ -15,31 +15,20 @@ node scripts/backfill-provenance.mjs             # Apply changes
 ### safe-review-copy.ps1
 PowerShell script for safely copying files with review.
 
-### fix-terminal-startup.ps1
-One-shot fixer for Windows terminal startup issues: pins fastfetch's logo type and disables its version detection and terminal-theme module so it stops probing the terminal with escape queries (stray characters like `80\` on the prompt line + startup stall), excludes external disks from fastfetch's disk module (USB spin-up delay), installs a Clink Lua hook that drains late terminal-query replies before the first cmd.exe prompt, disables oh-my-posh's startup upgrade-notice/auto-upgrade network checks, and rewrites unmatched Claude Code permission rules (`Write(**)`/`NotebookEdit(**)` → `Edit(**)`, `Glob(**)` → `Read(**)`) in `~/.claude/settings.json`. Idempotent; backs up every file it touches. Requires PowerShell 7+.
+### Terminal setup scripts (see docs/WINDOWS_TERMINAL_SETUP.md)
+The load-bearing three, chained by `install-terminal-setup.ps1` on a fresh machine:
+
+- **fix-terminal-startup.ps1** — Windows: fastfetch probe/disk hygiene, oh-my-posh upgrade checks off, Claude Code permission-rule rewrite (`Write(**)`/`NotebookEdit(**)` → `Edit(**)`, `Glob(**)` → `Read(**)`).
+- **fix-psmux-drain.ps1** — the stray-character fix: pwsh-profile input drain for Alacritty/psmux panes (gated on `ALACRITTY=1`).
+- **fix-terminal-startup.sh** — same fastfetch/omp hygiene inside WSL (string-aware JSONC parsing).
+
+All idempotent with timestamped backups; `.ps1` need PowerShell 7+.
 
 ```powershell
-pwsh -File scripts/fix-terminal-startup.ps1 -DryRun  # Preview changes
-pwsh -File scripts/fix-terminal-startup.ps1          # Apply changes
+pwsh -ExecutionPolicy Bypass -File scripts/install-terminal-setup.ps1   # everything, in order
 ```
 
-### fix-terminal-startup.sh
-Unix-side companion for the WSL/MSYS2 environment tmux runs in (its own fastfetch config and rc files): pins fastfetch's probe settings, installs a quiet-window input-drain hook for bash/zsh, disables oh-my-posh's upgrade checks. Idempotent with backups; string-aware JSONC parsing.
-
-```bash
-bash scripts/fix-terminal-startup.sh --dry-run  # Preview changes
-bash scripts/fix-terminal-startup.sh            # Apply changes
-```
-
-### speed-terminal-startup.ps1 / speed-terminal-startup.sh
-Startup speed pass: rewrites the PowerShell profile / shell rc so fastfetch prints a cached splash instantly and regenerates it in the background into a file (which also removes its last way to query the terminal — the root cause of stray characters like `7f7f\` at the first prompt), and caches the oh-my-posh init script instead of spawning oh-my-posh every shell start. Conservative (only simple invocation forms are rewritten), idempotent, backups to `%LOCALAPPDATA%\ftsu-backups` / alongside the file. See `docs/WINDOWS_TERMINAL_SETUP.md` for the full story and Windows gotchas (OneDrive profiles, Controlled Folder Access).
-
-```powershell
-pwsh -ExecutionPolicy Bypass -File scripts/speed-terminal-startup.ps1
-```
-```bash
-bash scripts/speed-terminal-startup.sh
-```
+Historical/situational: `speed-terminal-startup.ps1/.sh` (oh-my-posh init caching is the useful part; the fastfetch splash caching half is NOT recommended — non-tty fastfetch degrades glyphs and doubles up, see `revert-splash-cache.ps1` which undoes it) and `finalize-terminal-setup.ps1` (post-investigation cleanup + replication-folder deploy).
 
 ## Usage
 Scripts are run from the project root:

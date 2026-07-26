@@ -11,10 +11,9 @@
 # What it does:
 #   - fastfetch: pin an explicit logo type, set general.detectVersion false,
 #     drop the terminaltheme module (OSC 10/11 color query) if present
-#   - bash/zsh: install a once-per-session hook that drains pending terminal
-#     replies right before the first prompt accepts input (catches any
-#     remaining emitter, including queries relayed oddly through tmux)
 #   - oh-my-posh: disable the upgrade notice and auto-upgrade network checks
+# (If stray characters appear in Alacritty/psmux panes, the emitter is psmux —
+# run fix-psmux-drain.ps1 on the Windows side; the pane shell there is pwsh.)
 #
 # Idempotent - safe to re-run. Edited files get timestamped .bak-* siblings.
 #
@@ -152,105 +151,7 @@ else
   say "  set logo.type explicitly, general.detectVersion=false, remove any terminaltheme module"
 fi
 
-# --- 2. bash/zsh: drain late terminal replies before the first prompt ------
-
-# v2: quiet-window drain. The v1 loop gave up after a single 50ms gap, so a
-# reply relayed by tmux in two chunks got half-eaten and the tail still
-# leaked. v2 keeps draining until ~200ms of continuous silence (bounded).
-MARKER_OLD="# --- startup-input-drain (fix-terminal-startup) ---"
-MARKER="# --- startup-input-drain v2 (fix-terminal-startup) ---"
-MARKER_END="# --- end startup-input-drain ---"
-
-remove_old_block() {
-  local rc="$1"
-  [ -f "$rc" ] && grep -qF "$MARKER_OLD" "$rc" || return 1
-  if [ "$DRY" = 0 ]; then
-    cp "$rc" "$rc.bak-$(date +%Y%m%d-%H%M%S)"
-    sed -i "\|^$MARKER_OLD\$|,\|^$MARKER_END\$|d" "$rc"
-  fi
-  say "removed v1 drain hook from $rc"
-}
-
-install_bash_drain() {
-  local rc="$1"
-  if [ -f "$rc" ] && grep -qF "$MARKER" "$rc"; then
-    say "$rc - already installed"
-    return
-  fi
-  remove_old_block "$rc" || true
-  if [ "$DRY" = 0 ]; then
-    cat >> "$rc" <<'EOF'
-
-# --- startup-input-drain v2 (fix-terminal-startup) ---
-# Startup programs (fastfetch, oh-my-posh, ...) may query the terminal with
-# escape sequences; the reply can arrive after the prompt is ready - possibly
-# in chunks, via tmux - and leak onto the input line as junk like "80\".
-# Drain until the line has been quiet for ~200ms, once, at the first prompt.
-__ftsu_drain_input() {
-  local _k _quiet=0 _got=0
-  while [ "$_quiet" -lt 2 ] && [ "$_got" -lt 512 ]; do
-    if IFS= read -r -s -t 0.1 -n 1 _k 2>/dev/null; then
-      _got=$((_got + 1)); _quiet=0
-    else
-      _quiet=$((_quiet + 1))
-    fi
-  done
-  PROMPT_COMMAND="${PROMPT_COMMAND//__ftsu_drain_input; /}"
-}
-case "${PROMPT_COMMAND:-}" in
-  *__ftsu_drain_input*) ;;
-  *) PROMPT_COMMAND="__ftsu_drain_input; ${PROMPT_COMMAND:-}" ;;
-esac
-# --- end startup-input-drain ---
-EOF
-  fi
-  say "installed v2 drain hook in $rc"
-}
-
-install_zsh_drain() {
-  local rc="$1"
-  if [ -f "$rc" ] && grep -qF "$MARKER" "$rc"; then
-    say "$rc - already installed"
-    return
-  fi
-  remove_old_block "$rc" || true
-  if [ "$DRY" = 0 ]; then
-    cat >> "$rc" <<'EOF'
-
-# --- startup-input-drain v2 (fix-terminal-startup) ---
-# Startup programs (fastfetch, oh-my-posh, ...) may query the terminal with
-# escape sequences; the reply can arrive after the prompt is ready - possibly
-# in chunks, via tmux - and leak onto the input line as junk like "80\".
-# Drain until the line has been quiet for ~200ms, once, at the first prompt.
-__ftsu_drain_input() {
-  local _k _quiet=0 _got=0
-  while [ "$_quiet" -lt 2 ] && [ "$_got" -lt 512 ]; do
-    if read -s -t 0.1 -k 1 _k 2>/dev/null; then
-      _got=$((_got + 1)); _quiet=0
-    else
-      _quiet=$((_quiet + 1))
-    fi
-  done
-  precmd_functions=(${precmd_functions:#__ftsu_drain_input})
-}
-if [[ " ${precmd_functions[*]:-} " != *" __ftsu_drain_input "* ]]; then
-  precmd_functions+=(__ftsu_drain_input)
-fi
-# --- end startup-input-drain ---
-EOF
-  fi
-  say "installed v2 drain hook in $rc"
-}
-
-hdr "shell startup hooks"
-did_rc=0
-[ -f "$HOME/.bashrc" ] && install_bash_drain "$HOME/.bashrc" && did_rc=1
-[ -f "$HOME/.zshrc" ] && install_zsh_drain "$HOME/.zshrc" && did_rc=1
-if [ "$did_rc" = 0 ]; then
-  install_bash_drain "$HOME/.bashrc"
-fi
-
-# --- 3. oh-my-posh ---------------------------------------------------------
+# --- 2. oh-my-posh ---------------------------------------------------------
 
 hdr "oh-my-posh"
 if command -v oh-my-posh >/dev/null 2>&1; then
@@ -266,4 +167,4 @@ else
   say "oh-my-posh not on PATH - skipped"
 fi
 
-printf '\nDone. Open a new tmux window/pane (or restart tmux) to verify the stray characters are gone.\n'
+printf '\nDone. Open a new shell to verify.\n'

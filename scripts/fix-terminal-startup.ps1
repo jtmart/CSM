@@ -12,10 +12,9 @@
      sources and are disabled/removed. External disks (a sleeping USB drive
      has to spin up before it can report capacity) are excluded from the disk
      module for the same reason. oh-my-posh's upgrade notice and auto-upgrade
-     do network version checks on startup; both get disabled. Finally, a Clink
-     Lua hook is installed that drains any still-pending terminal reply right
-     before the first cmd.exe prompt accepts input, which kills the symptom
-     even if some other program emits a query.
+     do network version checks on startup; both get disabled. (If stray
+     characters persist in Alacritty/psmux panes, the emitter is psmux itself
+     — run fix-psmux-drain.ps1, which installs the drain in the inner pwsh.)
 
   2. Claude Code CLI startup warnings about permission allow rules:
        Write(**)        -> not matched; file checks only honor Edit(path)
@@ -232,55 +231,7 @@ function Repair-FastfetchConfig {
   }
 }
 
-# --- 3. Clink: drain late terminal replies before the first prompt ---------
-
-$ClinkDrainLua = @'
--- zz-flush-startup-input.lua (v2)
--- Startup programs (fastfetch, oh-my-posh, ...) may query the terminal with
--- escape sequences. In fast GPU terminals (Alacritty, WezTerm) the reply can
--- arrive after the prompt is already accepting input - possibly in chunks -
--- and leaks onto the line as junk like "80\". Drain pending input until the
--- line has been quiet for ~200ms (bounded), once, at the first prompt.
-local done = false
-clink.onbeginedit(function ()
-  if done then return end
-  done = true
-  local ok = pcall(function ()
-    if not (console and console.checkinput and console.readinput) then return end
-    local quiet, got = 0, 0
-    while quiet < 2 and got < 512 do
-      if console.checkinput(0.1) then
-        console.readinput()
-        got = got + 1
-        quiet = 0
-      else
-        quiet = quiet + 1
-      end
-    end
-  end)
-end)
-'@
-
-function Install-ClinkStartupDrain {
-  Write-Host "`n== Clink (cmd.exe prompt) ==" -ForegroundColor Cyan
-  $profileDir = if ($env:CLINK_PROFILE) { $env:CLINK_PROFILE }
-  elseif ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'clink' }
-  else { $null }
-  if (-not $profileDir) { Write-Host '  no LOCALAPPDATA/CLINK_PROFILE - skipped'; return }
-
-  $luaPath = Join-Path $profileDir 'zz-flush-startup-input.lua'
-  if ((Test-Path $luaPath) -and ((Get-Content $luaPath -Raw).Trim() -eq $ClinkDrainLua.Trim())) {
-    Write-Host "  $luaPath - already installed"
-    return
-  }
-  if (-not $DryRun) {
-    if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }
-    Set-Content -Path $luaPath -Value $ClinkDrainLua -Encoding utf8
-  }
-  Note "installed $luaPath (drains pending terminal replies at the first cmd prompt)"
-}
-
-# --- 4. oh-my-posh ---------------------------------------------------------
+# --- 3. oh-my-posh ---------------------------------------------------------
 
 function Disable-OmpStartupChecks {
   Write-Host "`n== oh-my-posh ==" -ForegroundColor Cyan
@@ -310,7 +261,6 @@ if ($DryRun) { Write-Host "DRY RUN - no files will be modified`n" -ForegroundCol
 
 Repair-ClaudeSettings
 Repair-FastfetchConfig
-Install-ClinkStartupDrain
 Disable-OmpStartupChecks
 
 Write-Host "`n== summary ==" -ForegroundColor Cyan
