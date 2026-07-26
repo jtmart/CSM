@@ -235,20 +235,27 @@ function Repair-FastfetchConfig {
 # --- 3. Clink: drain late terminal replies before the first prompt ---------
 
 $ClinkDrainLua = @'
--- zz-flush-startup-input.lua
+-- zz-flush-startup-input.lua (v2)
 -- Startup programs (fastfetch, oh-my-posh, ...) may query the terminal with
 -- escape sequences. In fast GPU terminals (Alacritty, WezTerm) the reply can
--- arrive after the prompt is already accepting input and leaks onto the line
--- as junk like "80\". Drain pending input once, at the first prompt.
+-- arrive after the prompt is already accepting input - possibly in chunks -
+-- and leaks onto the line as junk like "80\". Drain pending input until the
+-- line has been quiet for ~200ms (bounded), once, at the first prompt.
 local done = false
 clink.onbeginedit(function ()
   if done then return end
   done = true
   local ok = pcall(function ()
     if not (console and console.checkinput and console.readinput) then return end
-    local deadline = os.clock() + 0.30
-    while os.clock() < deadline and console.checkinput(0.05) do
-      console.readinput()
+    local quiet, got = 0, 0
+    while quiet < 2 and got < 512 do
+      if console.checkinput(0.1) then
+        console.readinput()
+        got = got + 1
+        quiet = 0
+      else
+        quiet = quiet + 1
+      end
     end
   end)
 end)

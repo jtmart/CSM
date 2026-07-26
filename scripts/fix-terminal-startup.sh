@@ -154,7 +154,22 @@ fi
 
 # --- 2. bash/zsh: drain late terminal replies before the first prompt ------
 
-MARKER="# --- startup-input-drain (fix-terminal-startup) ---"
+# v2: quiet-window drain. The v1 loop gave up after a single 50ms gap, so a
+# reply relayed by tmux in two chunks got half-eaten and the tail still
+# leaked. v2 keeps draining until ~200ms of continuous silence (bounded).
+MARKER_OLD="# --- startup-input-drain (fix-terminal-startup) ---"
+MARKER="# --- startup-input-drain v2 (fix-terminal-startup) ---"
+MARKER_END="# --- end startup-input-drain ---"
+
+remove_old_block() {
+  local rc="$1"
+  [ -f "$rc" ] && grep -qF "$MARKER_OLD" "$rc" || return 1
+  if [ "$DRY" = 0 ]; then
+    cp "$rc" "$rc.bak-$(date +%Y%m%d-%H%M%S)"
+    sed -i "\|^$MARKER_OLD\$|,\|^$MARKER_END\$|d" "$rc"
+  fi
+  say "removed v1 drain hook from $rc"
+}
 
 install_bash_drain() {
   local rc="$1"
@@ -162,16 +177,24 @@ install_bash_drain() {
     say "$rc - already installed"
     return
   fi
+  remove_old_block "$rc" || true
   if [ "$DRY" = 0 ]; then
     cat >> "$rc" <<'EOF'
 
-# --- startup-input-drain (fix-terminal-startup) ---
+# --- startup-input-drain v2 (fix-terminal-startup) ---
 # Startup programs (fastfetch, oh-my-posh, ...) may query the terminal with
-# escape sequences; the reply can arrive after the prompt is ready and leak
-# onto the input line as junk like "7f7f\". Drain it once, at the first prompt.
+# escape sequences; the reply can arrive after the prompt is ready - possibly
+# in chunks, via tmux - and leak onto the input line as junk like "80\".
+# Drain until the line has been quiet for ~200ms, once, at the first prompt.
 __ftsu_drain_input() {
-  local _k
-  while IFS= read -r -s -t 0.05 -n 1 _k 2>/dev/null; do :; done
+  local _k _quiet=0 _got=0
+  while [ "$_quiet" -lt 2 ] && [ "$_got" -lt 512 ]; do
+    if IFS= read -r -s -t 0.1 -n 1 _k 2>/dev/null; then
+      _got=$((_got + 1)); _quiet=0
+    else
+      _quiet=$((_quiet + 1))
+    fi
+  done
   PROMPT_COMMAND="${PROMPT_COMMAND//__ftsu_drain_input; /}"
 }
 case "${PROMPT_COMMAND:-}" in
@@ -181,7 +204,7 @@ esac
 # --- end startup-input-drain ---
 EOF
   fi
-  say "installed drain hook in $rc"
+  say "installed v2 drain hook in $rc"
 }
 
 install_zsh_drain() {
@@ -190,16 +213,24 @@ install_zsh_drain() {
     say "$rc - already installed"
     return
   fi
+  remove_old_block "$rc" || true
   if [ "$DRY" = 0 ]; then
     cat >> "$rc" <<'EOF'
 
-# --- startup-input-drain (fix-terminal-startup) ---
+# --- startup-input-drain v2 (fix-terminal-startup) ---
 # Startup programs (fastfetch, oh-my-posh, ...) may query the terminal with
-# escape sequences; the reply can arrive after the prompt is ready and leak
-# onto the input line as junk like "7f7f\". Drain it once, at the first prompt.
+# escape sequences; the reply can arrive after the prompt is ready - possibly
+# in chunks, via tmux - and leak onto the input line as junk like "80\".
+# Drain until the line has been quiet for ~200ms, once, at the first prompt.
 __ftsu_drain_input() {
-  local _k
-  while read -s -t 0.05 -k 1 _k 2>/dev/null; do :; done
+  local _k _quiet=0 _got=0
+  while [ "$_quiet" -lt 2 ] && [ "$_got" -lt 512 ]; do
+    if read -s -t 0.1 -k 1 _k 2>/dev/null; then
+      _got=$((_got + 1)); _quiet=0
+    else
+      _quiet=$((_quiet + 1))
+    fi
+  done
   precmd_functions=(${precmd_functions:#__ftsu_drain_input})
 }
 if [[ " ${precmd_functions[*]:-} " != *" __ftsu_drain_input "* ]]; then
@@ -208,7 +239,7 @@ fi
 # --- end startup-input-drain ---
 EOF
   fi
-  say "installed drain hook in $rc"
+  say "installed v2 drain hook in $rc"
 }
 
 hdr "shell startup hooks"
