@@ -66,9 +66,19 @@ Extra latency sources also fixed:
   the omp theme, delete `ftsu-omp-init.*` from `%LOCALAPPDATA%` (Windows) or
   `~/.cache` (WSL) to regenerate.
 
-If a leak ever reappears in cmd.exe, the one-command diagnostic is
-`clink set prompt.async false` — Clink renders prompts asynchronously by
-default, so anything the prompt filter queries replies *after* input is live.
+**The final culprit on this setup was psmux.** Alacritty launches every tab as
+`cmd /c psmux new-session pwsh.exe -NoLogo` — psmux (tmux-for-Windows) queries
+the host terminal at attach, and Alacritty's reply is forwarded into the inner
+pwsh pane where its tail renders as stray input. psmux has no option to
+disable the query, so the fix is `fix-psmux-drain.ps1`: a drain block at the
+end of the PowerShell profile, active only when `$env:ALACRITTY` is `1` (set
+by the Alacritty config), that swallows pending input until ~200ms of quiet
+after profile load and again at the first prompt render. Diagnosis lesson:
+identify the *inner shell* of the leaking tab first (here fastfetch reported
+"Shell: CMD" but the pane shell was pwsh via psmux) — drain hooks only work
+if they live in that shell. Note there is no Clink and no cmd AutoRun in this
+setup; the fancy cmd-tab prompt comes from oh-my-posh inside the psmux-hosted
+pwsh.
 
 ### Claude Code permission-rule warnings
 
