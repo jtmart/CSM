@@ -100,9 +100,14 @@ function Update-Profile([string]$Path) {
   }
 
   if ($changed -and -not $DryRun) {
-    Copy-Item $Path "$Path.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+    # Backup into LOCALAPPDATA rather than next to the profile: OneDrive-synced
+    # folders can fail Copy-Item on placeholder files.
+    $bakDir = Join-Path $env:LOCALAPPDATA 'ftsu-backups'
+    if (-not (Test-Path $bakDir)) { New-Item -ItemType Directory -Path $bakDir -Force | Out-Null }
+    $bak = Join-Path $bakDir "$(Split-Path $Path -Leaf).bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+    Set-Content -Path $bak -Value $raw -Encoding utf8
     Set-Content -Path $Path -Value ($lines -join [Environment]::NewLine) -Encoding utf8
-    Note "rewrote $Path (backup kept)"
+    Note "rewrote $Path (backup: $bak)"
   }
   elseif ($changed) {
     Note '(dry run - not written)'
