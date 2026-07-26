@@ -282,12 +282,19 @@ function Disable-OmpStartupChecks {
     return
   }
   if ($DryRun) {
-    Write-Host '  would run: oh-my-posh disable notice; oh-my-posh disable autoupgrade'
+    Write-Host '  would run: oh-my-posh disable notice; oh-my-posh disable upgrade'
     return
   }
   oh-my-posh disable notice
-  oh-my-posh disable autoupgrade
-  Note 'disabled oh-my-posh upgrade notice and auto-upgrade startup checks'
+  # the subcommand is 'upgrade' on current versions, 'autoupgrade' on older ones
+  $null = & oh-my-posh disable upgrade 2>&1
+  if ($LASTEXITCODE -ne 0) { $null = & oh-my-posh disable autoupgrade 2>&1 }
+  if ($LASTEXITCODE -eq 0) {
+    Note 'disabled oh-my-posh upgrade notice and auto-upgrade startup checks'
+  }
+  else {
+    Write-Host '  could not disable auto-upgrade (unrecognized CLI syntax); notice disabled'
+  }
 }
 
 # --- run -------------------------------------------------------------------
