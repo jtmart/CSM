@@ -16,7 +16,7 @@ node scripts/backfill-provenance.mjs             # Apply changes
 PowerShell script for safely copying files with review.
 
 ### fix-terminal-startup.ps1
-One-shot fixer for Windows terminal startup issues: pins fastfetch's logo type so it stops probing the terminal with escape queries (stray characters on the prompt line + startup stall), excludes external disks from fastfetch's disk module (USB spin-up delay), disables oh-my-posh's startup upgrade-notice network check, and rewrites unmatched Claude Code permission rules (`Write(**)`/`NotebookEdit(**)` → `Edit(**)`, `Glob(**)` → `Read(**)`) in `~/.claude/settings.json`. Idempotent; backs up every file it touches. Requires PowerShell 7+.
+One-shot fixer for Windows terminal startup issues: pins fastfetch's logo type and disables its version detection and terminal-theme module so it stops probing the terminal with escape queries (stray characters like `80\` on the prompt line + startup stall), excludes external disks from fastfetch's disk module (USB spin-up delay), installs a Clink Lua hook that drains late terminal-query replies before the first cmd.exe prompt, disables oh-my-posh's startup upgrade-notice/auto-upgrade network checks, and rewrites unmatched Claude Code permission rules (`Write(**)`/`NotebookEdit(**)` → `Edit(**)`, `Glob(**)` → `Read(**)`) in `~/.claude/settings.json`. Idempotent; backs up every file it touches. Requires PowerShell 7+.
 
 ```powershell
 pwsh -File scripts/fix-terminal-startup.ps1 -DryRun  # Preview changes

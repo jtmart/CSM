@@ -7,10 +7,15 @@
      image-protocol support with escape-sequence queries. conhost/cmd.exe never
      answers them, so fastfetch stalls waiting for a reply and the partial
      response leaks onto the input line as junk. Pinning an explicit logo type
-     skips the probe entirely. External disks (a sleeping USB drive has to spin
-     up before it can report capacity) are excluded from the disk module for
-     the same reason. oh-my-posh's upgrade notice does a network version check
-     on startup; it gets disabled too.
+     skips the probe entirely; version detection (general.detectVersion) and
+     the terminal-theme module (OSC 10/11 color query) are further probe
+     sources and are disabled/removed. External disks (a sleeping USB drive
+     has to spin up before it can report capacity) are excluded from the disk
+     module for the same reason. oh-my-posh's upgrade notice and auto-upgrade
+     do network version checks on startup; both get disabled. Finally, a Clink
+     Lua hook is installed that drains any still-pending terminal reply right
+     before the first cmd.exe prompt accepts input, which kills the symptom
+     even if some other program emits a query.
 
   2. Claude Code CLI startup warnings about permission allow rules:
        Write(**)        -> not matched; file checks only honor Edit(path)
@@ -132,6 +137,7 @@ function Repair-FastfetchConfig {
     $config = [pscustomobject]@{
       '$schema' = 'https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json'
       logo      = [pscustomobject]@{ type = 'builtin' }
+      general   = [pscustomobject]@{ detectVersion = $false }
     }
     Save-Json $path $config
     Note "created $path with an explicit logo type (was relying on 'auto' defaults)"
@@ -170,6 +176,33 @@ function Repair-FastfetchConfig {
     Write-Host "  logo type already explicit ('$($logo.type)')"
   }
 
+  # detectVersion (default true) enables version-specific detection paths that
+  # can query the terminal with escape sequences.
+  if ($null -eq $config.general) {
+    $config | Add-Member -NotePropertyName general -NotePropertyValue ([pscustomobject]@{ detectVersion = $false }) -Force
+    Note 'general: added { detectVersion: false }'
+    $changed = $true
+  }
+  elseif ($config.general.detectVersion -ne $false) {
+    $config.general | Add-Member -NotePropertyName detectVersion -NotePropertyValue $false -Force
+    Note 'general: set detectVersion: false'
+    $changed = $true
+  }
+
+  # The terminal-theme module asks the terminal for its colors via OSC 10/11 -
+  # exactly the kind of query whose reply leaks onto the prompt.
+  if ($config.modules) {
+    $kept = @($config.modules | Where-Object {
+        -not (($_ -is [string] -and $_ -match '^terminaltheme$') -or
+              ($_ -isnot [string] -and $_.type -match '^terminaltheme$'))
+      })
+    if ($kept.Count -ne @($config.modules).Count) {
+      $config.modules = $kept
+      Note 'modules: removed terminaltheme (queries terminal colors via OSC 10/11)'
+      $changed = $true
+    }
+  }
+
   # Keep external/USB disks out of the disk module - a sleeping drive can
   # take seconds to spin up just to report capacity.
   if ($config.modules) {
@@ -199,20 +232,62 @@ function Repair-FastfetchConfig {
   }
 }
 
-# --- 3. oh-my-posh ---------------------------------------------------------
+# --- 3. Clink: drain late terminal replies before the first prompt ---------
 
-function Disable-OmpUpgradeNotice {
+$ClinkDrainLua = @'
+-- zz-flush-startup-input.lua
+-- Startup programs (fastfetch, oh-my-posh, ...) may query the terminal with
+-- escape sequences. In fast GPU terminals (Alacritty, WezTerm) the reply can
+-- arrive after the prompt is already accepting input and leaks onto the line
+-- as junk like "80\". Drain pending input once, at the first prompt.
+local done = false
+clink.onbeginedit(function ()
+  if done then return end
+  done = true
+  local ok = pcall(function ()
+    if not (console and console.checkinput and console.readinput) then return end
+    local deadline = os.clock() + 0.30
+    while os.clock() < deadline and console.checkinput(0.05) do
+      console.readinput()
+    end
+  end)
+end)
+'@
+
+function Install-ClinkStartupDrain {
+  Write-Host "`n== Clink (cmd.exe prompt) ==" -ForegroundColor Cyan
+  $profileDir = if ($env:CLINK_PROFILE) { $env:CLINK_PROFILE }
+  elseif ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'clink' }
+  else { $null }
+  if (-not $profileDir) { Write-Host '  no LOCALAPPDATA/CLINK_PROFILE - skipped'; return }
+
+  $luaPath = Join-Path $profileDir 'zz-flush-startup-input.lua'
+  if ((Test-Path $luaPath) -and ((Get-Content $luaPath -Raw).Trim() -eq $ClinkDrainLua.Trim())) {
+    Write-Host "  $luaPath - already installed"
+    return
+  }
+  if (-not $DryRun) {
+    if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }
+    Set-Content -Path $luaPath -Value $ClinkDrainLua -Encoding utf8
+  }
+  Note "installed $luaPath (drains pending terminal replies at the first cmd prompt)"
+}
+
+# --- 4. oh-my-posh ---------------------------------------------------------
+
+function Disable-OmpStartupChecks {
   Write-Host "`n== oh-my-posh ==" -ForegroundColor Cyan
   if (-not (Get-Command oh-my-posh -ErrorAction SilentlyContinue)) {
     Write-Host '  oh-my-posh not on PATH - skipped'
     return
   }
   if ($DryRun) {
-    Write-Host "  would run: oh-my-posh disable notice"
+    Write-Host '  would run: oh-my-posh disable notice; oh-my-posh disable autoupgrade'
     return
   }
   oh-my-posh disable notice
-  Note 'disabled oh-my-posh upgrade notice (startup network version check)'
+  oh-my-posh disable autoupgrade
+  Note 'disabled oh-my-posh upgrade notice and auto-upgrade startup checks'
 }
 
 # --- run -------------------------------------------------------------------
@@ -221,7 +296,8 @@ if ($DryRun) { Write-Host "DRY RUN - no files will be modified`n" -ForegroundCol
 
 Repair-ClaudeSettings
 Repair-FastfetchConfig
-Disable-OmpUpgradeNotice
+Install-ClinkStartupDrain
+Disable-OmpStartupChecks
 
 Write-Host "`n== summary ==" -ForegroundColor Cyan
 if ($script:Changes.Count -eq 0) {
