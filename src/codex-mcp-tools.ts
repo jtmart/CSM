@@ -22,20 +22,20 @@ export const MCP_TOOLS = [
     tags: { type: 'array', items: { type: 'string' }, description: 'Optional memory tags.' },
     importance: { type: 'number', description: 'Optional importance score from 0 to 1.' },
   }, ['content', 'type'], hints(false, false, false)),
-  toolSpec('search_memories', 'Search memories with bridge fallback behavior.', {
+  toolSpec('search_memories', 'Search memories across every project by meaning (global scope unless searchMode says otherwise).', {
     query: { type: 'string', description: 'Search query.' },
-    projectId: { type: 'string', description: 'Project id or root to search within.' },
+    projectId: { type: 'string', description: 'Project id or root; only narrows results when searchMode is "project" or "legacy".' },
     sessionId: { type: 'string', description: 'Optional bridge session id.' },
     limit: { type: 'number', description: 'Max result count.', default: 5 },
-    searchMode: { type: 'string', enum: SEARCH_MODES, description: 'Search scope strategy.' },
+    searchMode: { type: 'string', enum: SEARCH_MODES, description: 'Search scope. Defaults to "global" (all projects); "project" fences to projectId.' },
   }, ['query'], hints(true, false, false)),
-  toolSpec('list_memories', 'List recent or important memories for a project.', {
-    projectId: { type: 'string', description: 'Project id or root to list from.' },
+  toolSpec('list_memories', 'List recent or important memories (global scope unless searchMode says otherwise).', {
+    projectId: { type: 'string', description: 'Project id or root; only narrows results when searchMode is "project" or "legacy".' },
     sessionId: { type: 'string', description: 'Optional bridge session id.' },
     limit: { type: 'number', description: 'Max result count.', default: 10 },
     type: { type: 'string', enum: MEMORY_TYPES, description: 'Filter by memory type.' },
     sortBy: { type: 'string', enum: SORT_OPTIONS, description: 'Sort order.' },
-    searchMode: { type: 'string', enum: SEARCH_MODES, description: 'Project, legacy, or global.' },
+    searchMode: { type: 'string', enum: SEARCH_MODES, description: 'List scope. Defaults to "global" (all projects); "project" fences to projectId.' },
   }, [], hints(true, false, false)),
   toolSpec('get_context_brief', 'Build a compact context brief for a task.', {
     task: { type: 'string', description: 'Task to prime for.' },
@@ -132,24 +132,39 @@ function buildSaveInput(args: ToolArgs): MemorySaveOptions & { projectRoot?: str
   };
 }
 
+// Reads default to GLOBAL scope, and never invent a projectId for them.
+//
+// `defaultProject()` falls back to the basename of process.cwd(). For a stdio MCP server
+// that is the server's own cwd, not the client's: launch-mcp.mjs chdir()s into the runtime
+// root, so every read without an explicit projectId was silently fenced to the handful of
+// rows misattributed to "cross-session-memory" (or "csm-runtime"). The cascade in
+// searchMemoriesOp only widens on ZERO hits, and vector search never returns zero, so
+// `search_memories` ranked the nearest neighbours of a near-empty bucket and the rest of
+// the shared database was invisible. The memories are one shared pool across machines
+// whose project paths differ (a Windows C: path vs a Mac /Users path), so meaning-based
+// search is global unless the caller explicitly asks for a fence.
+function readScope(value: unknown): MemorySearchMode {
+  return (optionalString(value) as MemorySearchMode | undefined) ?? 'global';
+}
+
 function buildSearchInput(args: ToolArgs): MemorySearchOptions & { sessionId?: string } {
   return {
     query: requiredString(args.query, 'query'),
-    projectId: defaultProject(args.projectId),
+    projectId: optionalString(args.projectId),
     sessionId: optionalString(args.sessionId),
     limit: optionalNumber(args.limit) ?? 5,
-    searchMode: optionalString(args.searchMode) as MemorySearchMode | undefined,
+    searchMode: readScope(args.searchMode),
   };
 }
 
 function buildListInput(args: ToolArgs): MemoryListOptions & { sessionId?: string } {
   return {
-    projectId: defaultProject(args.projectId),
+    projectId: optionalString(args.projectId),
     sessionId: optionalString(args.sessionId),
     limit: optionalNumber(args.limit) ?? 10,
     type: optionalString(args.type) as MemoryType | undefined,
     sortBy: optionalString(args.sortBy) as SortBy | undefined,
-    searchMode: optionalString(args.searchMode) as MemorySearchMode | undefined,
+    searchMode: readScope(args.searchMode),
   };
 }
 
